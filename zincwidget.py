@@ -51,7 +51,7 @@ class ZincWidget(QtOpenGL.QGLWidget):
     try:
         # PySide
         graphicsInitialized = QtCore.Signal()
-    except AttributError:
+    except AttributeError:
         # PyQt
         graphicsInitialized = QtCore.pyqtSignal()
     
@@ -62,8 +62,9 @@ class ZincWidget(QtOpenGL.QGLWidget):
         Call the super class init functions, set the  Zinc context and the scene viewer handle to None.
         Initialise other attributes that deal with selection and the rotation of the plane.
         '''
-        QtOpenGL.QGLWidget.__init__(self, parent)
-        # Create a Zinc context from which all other objects can be derived either directly or indirectly.
+        super(ZincWidget, self).__init__(parent)
+        # The context is created externally so that other code has access to it. 
+        #self._context = Context("ZincWidget")
         self._context = None
         self._scene_viewer = None
 
@@ -73,6 +74,7 @@ class ZincWidget(QtOpenGL.QGLWidget):
         self._elemSelectMode = True
         self._selectionMode = _SelectionMode.NONE
         self._selectionGroup = None
+        self._selectionGroupName = "SelectionGroup"
         self._selectionBox = None
         self._selectionAlwaysAdditive = False
         
@@ -84,12 +86,19 @@ class ZincWidget(QtOpenGL.QGLWidget):
         method is called otherwise the scene viewer cannot be created.
         '''
         self._context = context
+        self.setCurrentRegion(context.getDefaultRegion())
 
     def getContext(self):
         if not self._context is None:
             return self._context
         else:
             raise RuntimeError("Zinc context has not been set.")
+        
+    def setCurrentRegion(self, region):
+        self._current_region = region
+
+    def getCurrentRegion(self):
+        return self._current_region
 
     def getSceneviewer(self):
         '''
@@ -100,6 +109,15 @@ class ZincWidget(QtOpenGL.QGLWidget):
     def setSelectionModeAdditive(self):
         self._selectionAlwaysAdditive = True
 
+    def _createSceneFilterForDomainType(self, domainType):
+        filter_module = self._context.getScenefiltermodule()
+        visible = filter_module.createScenefilterVisibilityFlags()
+        domain = filter_module.createScenefilterFieldDomainType(domainType)
+        and_filter = filter_module.createScenefilterOperatorAnd()
+        and_filter.appendOperand(visible)
+        and_filter.appendOperand(domain)
+        return and_filter
+
     def setSelectModeNode(self):
         '''
         Set the selection mode to select *only* nodes.
@@ -107,6 +125,8 @@ class ZincWidget(QtOpenGL.QGLWidget):
         self._nodeSelectMode = True
         self._dataSelectMode = False
         self._elemSelectMode = False
+        scene_filter = self._createSceneFilterForDomainType(Field.DOMAIN_TYPE_NODES)
+        self._scene_picker.setScenefilter(scene_filter)
 
     def setSelectModeData(self):
         '''
@@ -115,6 +135,8 @@ class ZincWidget(QtOpenGL.QGLWidget):
         self._nodeSelectMode = False
         self._dataSelectMode = True
         self._elemSelectMode = False
+        scene_filter = self._createSceneFilterForDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
+        self._scene_picker.setScenefilter(scene_filter)
 
     def setSelectModeElement(self):
         '''
@@ -123,25 +145,59 @@ class ZincWidget(QtOpenGL.QGLWidget):
         self._nodeSelectMode = False
         self._dataSelectMode = False
         self._elemSelectMode = True
+        scene_filter = self._createSceneFilterForDomainType(Field.DOMAIN_TYPE_MESH3D)
+        self._scene_picker.setScenefilter(scene_filter)
+
+    def setSelectModeFace(self):
+        '''
+        Set the selection mode to select *only* faces (2D mesh objects).
+        '''
+        self._nodeSelectMode = False
+        self._dataSelectMode = False
+        self._elemSelectMode = True
+        scene_filter = self._createSceneFilterForDomainType(Field.DOMAIN_TYPE_MESH2D)
+        self._scene_picker.setScenefilter(scene_filter)
+
+    def setSelectModeLine(self):
+        '''
+        Set the selection mode to select *only* lines (1D mesh objects).
+        '''
+        self._nodeSelectMode = False
+        self._dataSelectMode = False
+        self._elemSelectMode = True
+        scene_filter = self._createSceneFilterForDomainType(Field.DOMAIN_TYPE_MESH1D)
+        self._scene_picker.setScenefilter(scene_filter)
 
     def setSelectModeAll(self):
         '''
-        Set the selection mode to select both nodes and elements.
+        Set the selection mode to select anything in the scene.
         '''
         self._nodeSelectMode = True
         self._dataSelectMode = True
         self._elemSelectMode = True
+        self._scene_picker.setScenefilter(None)
         
     def setSelectModeNone(self):
         '''
-        Turn selection off.
+        Turn selection off and clear the filter on the scene picker.
         '''
         self._nodeSelectMode = False
         self._dataSelectMode = False
         self._elemSelectMode = False
+        self._scene_picker.setScenefilter(None)
         
     def getSelectionGroup(self):
         return self._selectionGroup
+        
+
+    def getSelectionGroupName(self):
+        """
+        Get the selection group name that can be used to query the field module
+        to get the selection group.
+        E.g.:
+        selectionGroup = field_module m.findFieldByName(name).castGroup()
+        """
+        return self._selectionGroupName
         
     def setProjectionMode(self, mode):
         '''
@@ -172,12 +228,15 @@ class ZincWidget(QtOpenGL.QGLWidget):
 
         # Set the graphics filter for the scene viewer otherwise nothing will be visible.
         self._scene_viewer.setScenefilter(graphics_filter)
-        region = self._context.getDefaultRegion()
+        region = self.getCurrentRegion()
         scene = region.getScene()
         fieldmodule = region.getFieldmodule()
         self._selectionGroup = fieldmodule.createFieldGroup()
+        self._selectionGroup.setName(self._selectionGroupName)
         scene.setSelectionField(self._selectionGroup)
         self._scene_picker = scene.createScenepicker()
+        # set the filter to allow only picking of visible graphics
+        self._scene_picker.setScenefilter(graphics_filter) 
         self._scene_viewer.setScene(scene)
 
         # Using a really cheap workaround for creating a rubber band for selection.
@@ -401,7 +460,7 @@ class ZincWidget(QtOpenGL.QGLWidget):
             x = mouseevent.x()
             y = mouseevent.y()
             # Construct a small frustum to look for nodes in.
-            root_region = self._context.getDefaultRegion()
+            root_region = self.getCurrentRegion()
             root_region.beginHierarchicalChange()
             self._selectionBox.setVisibilityFlag(False)
 
